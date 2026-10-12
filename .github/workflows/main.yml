@@ -1,37 +1,21 @@
-name: Triangular Arbitrage - CI
+name: CI
+
 on:
   push:
-    branches:
-      - 'master'
-    tags:
-      - '*'
+    branches: [master, main]
   pull_request:
 
 jobs:
-  lint:
-    uses: Drakkar-Software/.github/.github/workflows/python3_lint_workflow.yml@master
-    with:
-      project_main_package: triangular_arbitrage
-
-  tests:
-    needs: lint
-    uses: Drakkar-Software/.github/.github/workflows/python3_tests_workflow.yml@master
-
-  publish:
-    needs: tests
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
-    uses: Drakkar-Software/.github/.github/workflows/python3_sdist_workflow.yml@master
-    secrets:
-      PYPI_OFFICIAL_UPLOAD_URL: ${{ secrets.PYPI_OFFICIAL_UPLOAD_URL }}
-      PYPI_USERNAME: __token__
-      PYPI_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-
-  notify:
-    if: ${{ failure() }}
-    needs:
-      - lint
-      - tests
-      - publish
-    uses: Drakkar-Software/.github/.github/workflows/failure_notify_workflow.yml@master
-    secrets:
-      DISCORD_GITHUB_WEBHOOK: ${{ secrets.DISCORD_GITHUB_WEBHOOK }}
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt -r dev_requirements.txt
+      - name: Test
+        run: pytest -q

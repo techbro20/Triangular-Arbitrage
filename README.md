@@ -1,56 +1,95 @@
-<p align="center">
-  <img src="illustration.jpeg" width="250px" height="250px" alt="Triangular illustration">
-</p>
+# Cyclic arbitrage bot (paper-first)
 
-# Arbitrage Opportunity Detection by OctoBot [1.2.2](https://github.com/Drakkar-Software/Triangular-Arbitrage/blob/master/CHANGELOG.md)
-[![PyPI](https://img.shields.io/pypi/v/OctoBot-Triangular-Arbitrage.svg)](https://pypi.python.org/pypi/OctoBot-Triangular-Arbitrage/)
-[![Dockerhub](https://img.shields.io/docker/pulls/drakkarsoftware/octobot-triangular-arbitrage.svg?logo=docker)](https://hub.docker.com/r/drakkarsoftware/octobot-triangular-arbitrage)
+Event-driven order-book arbitrage for **same-exchange** cycles (triangular and optional 4-cycles).  
+Starts with pluggable native WebSocket adapters: **MEXC, KuCoin, Gate.io, HTX, BingX, Bybit**. Telegram for alerts/control.
 
-This Python-based project utilizes the [ccxt library](https://github.com/ccxt/ccxt) and the [OctoBot library](https://github.com/Drakkar-Software/OctoBot) to detect potential arbitrage opportunities across multiple assets in cryptocurrency markets. It identifies profitable cycles where you can trade through a series of assets and return to the original asset with a potential gain, making it applicable for arbitrage strategies beyond just triangular cycles.
+**Live trading is refused by default.** Paper mode uses the same validation path live would use later.
 
-## Description
+## What it does
 
-Arbitrage trading is a process where you trade from one asset or currency to another, and then continue trading through a series of assets until you eventually return to the original asset or currency. The goal is to exploit price differences between multiple assets to generate a profit. For example, you could start with USD, buy BTC, use the BTC to buy ETH, trade the ETH for XRP, and finally sell the XRP back to USD. If the prices are favorable throughout the cycle, you could end up with more USD than you started with. This project provides a method to identify the best arbitrage opportunities in a multi-asset cycle, given a list of last prices for different cryptocurrency pairs. It's a versatile and effective tool for anyone interested in cryptocurrency trading and arbitrage strategies across various currencies and assets.
+1. Load spot markets (CCXT REST, once).
+2. Enumerate 3-cycles (default) from start assets (`USDT`, `USDC`).
+3. Subscribe only to those symbols' partial depth over native WebSockets.
+4. On each book update (coalesced): recheck only cycles that touch that symbol.
+5. Validate with taker fees + order-book walk + inventory + risk limits.
+6. Paper-fill, log JSONL, alert via Telegram.
 
-Note: the results do not account for fees during trades. This can have a significant impact on performance.
+Tickers / last price are **not** used.
 
-## Getting Started
+## Setup
 
-### Dependencies
-
-* Python 3.10
-
-### Installing
-
-```
-pip3 install -r requirements.txt
-```
-
-### Usage
-Start detection by running:
-```
-python3 main.py
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Unix:    source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r dev_requirements.txt
+cp .env.example .env
 ```
 
-Example output on Binance:
-```
--------------------------------------------
-New 2.33873% binanceus opportunity:
-# 1. buy DOGE with BTC at 552486.18785
-# 2. sell DOGE for USDT at 0.12232
-# 3. buy ETH with USDT at 0.00038
-# 4. buy ADA with ETH at 7570.02271
-# 5. sell ADA for USDC at 0.35000
-# 6. buy SOL with USDC at 0.00662
-# 7. sell SOL for BTC at 0.00226
--------------------------------------------
+Edit `.env` (Telegram optional). Never enable withdrawal permissions on API keys when you later add live trading.
+
+## Run (paper)
+
+```bash
+python main.py
 ```
 
-### Configuration
-To change the exchange edit `main.py` `exchange_name` value to the desired exchange. It should match the exchange [ccxt id value](https://github.com/ccxt/ccxt?tab=readme-ov-file#certified-cryptocurrency-exchanges)
+Headless works without Telegram. With `TELEGRAM_BOT_TOKEN` set (send `/start` once if chat id is empty):
 
-You can also provide a list of symbol to ignore when calling `run_detection` using `ignored_symbols` and a list of symbol to whitelist using `whitelisted_symbols`.
+| Command | Action |
+|---------|--------|
+| `/status` | Overview: books, PnL, trade count |
+| `/pnl` | Today's profit per exchange |
+| `/trades` | Last paper fills |
+| `/pause` / `/resume` | Pause trading |
+| `/kill` | Stop workers |
+| `/debug` | Feed reconnect / parse details |
+| `/mode` | Confirm paper vs live |
 
-## Help
+Push alerts fire on **paper fills** and important risk events.
 
-You can join any OctoBot community to get help [![Discord](https://img.shields.io/discord/530629985661222912.svg?logo=discord&label=Discord)](https://octobot.click/gh-discord) [![Telegram Chat](https://img.shields.io/badge/telegram-chat-green.svg?logo=telegram&label=Telegram)](https://octobot.click/gh-telegram)
+Logs: console + `logs/opportunities.jsonl` (accepted and high theoretical rejects).
+
+## Tests
+
+```bash
+pytest -q
+```
+
+## Config highlights
+
+| Env | Meaning |
+|-----|---------|
+| `EXCHANGES` | e.g. `mexc,kucoin,gateio,htx` (`bingx`,`bybit` also supported) |
+| `MIN_NET_PROFIT_BPS` | Min net profit after fees/slippage |
+| `MAX_NOTIONAL` / `MIN_NOTIONAL` | Size bounds |
+| `BOOK_USAGE_FRAC` | Fraction of each depth level used |
+| `DAILY_LOSS_LIMIT` | Auto-pause threshold (paper PnL) |
+| `MAX_SYMBOLS` | Cap WS subscriptions per exchange |
+| `PREFER_MID_LOW_LIQUIDITY` | Prefer mid/low 24h volume cycles (default true) |
+| `MIN_QUOTE_VOLUME` / `MAX_QUOTE_VOLUME` | Skip dust and ultra-liquid majors when ranking |
+| `PAPER_BALANCES` | JSON starting inventory per exchange |
+
+## Architecture
+
+```
+Config + Risk
+     │
+     ├─ MEXC worker  (native WS books → cycles → validator → paper exec)
+     ├─ KuCoin worker
+     └─ Telegram + opportunity JSONL
+```
+
+## Safety
+
+- `TRADING_MODE=paper` by default; live start exits unless both `TRADING_MODE=live` and `ENABLE_LIVE=true` (still not implemented for real orders).
+- Kill switch via Telegram `/kill`.
+- Daily loss limit and max notional enforced in code.
+
+## Roadmap (not in this build)
+
+- Native WS hardening / reconnect metrics
+- OKX / Binance / Bybit adapters
+- Real sequential/limit execution + private user streams
+- Longer cycles (Bellman-Ford) after 3-cycles prove an edge

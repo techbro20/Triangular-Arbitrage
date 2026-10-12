@@ -1,2 +1,2 @@
-PROJECT_NAME = "OctoBot-Triangular-Arbitrage"
-VERSION = "1.2.2"
+PROJECT_NAME = "Triangular-Arbitrage"
+VERSION = "2.0.0"
