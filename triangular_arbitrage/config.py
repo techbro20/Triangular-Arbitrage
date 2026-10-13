@@ -55,10 +55,12 @@ class Settings(BaseSettings):
     consumed_hold_seconds: float = 90.0
     pair_cooldown_seconds: float = 10.0
 
-    # Auto-block: a cycle that slips/fails CYCLE_MISS_LIMIT times without a held fill in
-    # between is blocked for CYCLE_BLOCK_HOURS (e.g. ULTIMA/USDC that never fills).
+    # Auto-block: a cycle with CYCLE_MISS_LIMIT slips/fails/REST mismatches in a row (no held
+    # fill in between) is blocked. Each repeat block doubles: 4h, 8h, 16h... up to the max;
+    # a held fill resets both the streak and the escalation.
     cycle_miss_limit: int = 3
     cycle_block_hours: float = 4.0
+    cycle_block_max_hours: float = 168.0
 
     # Sync checks: reject feeds lagging the exchange clock; legs further apart in time
     # than MAX_LEG_SKEW_MS, or edges above REST_VERIFY_BPS, are re-checked via REST.

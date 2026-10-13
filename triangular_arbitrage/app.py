@@ -28,6 +28,7 @@ async def run(settings: Settings | None = None) -> None:
         settings.opportunities_log,
         miss_limit=settings.cycle_miss_limit,
         block_hours=settings.cycle_block_hours,
+        block_max_hours=settings.cycle_block_max_hours,
         since_ts=settings.pnl_history_since_ts,
     )
     ctx = AppContext(

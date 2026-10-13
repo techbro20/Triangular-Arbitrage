@@ -180,6 +180,24 @@ async def _run_session(exchange: str, ctx: AppContext) -> None:
         cycle_block[cycle.id] = time.time() + settings.fade_cooldown_seconds
         ctx.opp_log.write_rejected(exchange, RejectedOpportunity(cycle, reason, theoretical, detail))
 
+    async def count_miss(cycle: Cycle, kind: str, profit: float | None) -> None:
+        """Slipped/failed fill or REST book mismatch: extend the streak, block with escalation."""
+        now = time.time()
+        streak = ctx.history.record_miss(exchange, cycle.id, kind, profit, now)
+        if settings.cycle_miss_limit <= 0 or streak < settings.cycle_miss_limit:
+            return
+        until, hours = ctx.history.block(
+            exchange, cycle.id, now, settings.cycle_block_hours, settings.cycle_block_max_hours
+        )
+        cycle_block[cycle.id] = until
+        status.blocked_cycles[cycle.id] = until
+        status.bump("auto_blocked")
+        log.info("%s auto-blocked %s for %.1fh after %s misses", exchange, cycle.id, hours, streak)
+        await ctx.alerts.send(
+            f"{exchange.upper()} blocked {cycle.id} for {hours:g}h "
+            f"({streak} slipped/failed/REST mismatches in a row)"
+        )
+
     async def on_snapshot(unified: str, bids, asks, *, exchange_ts=None, version=None) -> None:
         if not books.apply_snapshot(unified, bids, asks, exchange_ts=exchange_ts, version=version):
             status.bump("out_of_order")
@@ -223,6 +241,7 @@ async def _run_session(exchange: str, ctx: AppContext) -> None:
             if diverged:
                 detail += f" (diverged: {','.join(diverged)})"
             miss(cycle, RejectReason.REST_MISMATCH, confirmed.theoretical_product, detail, "rest_mismatch")
+            await count_miss(cycle, "rest_mismatch", None)
             return None
         return confirmed if confirmed.start_amount <= checked.start_amount else checked
 
@@ -272,18 +291,7 @@ async def _run_session(exchange: str, ctx: AppContext) -> None:
                 if realised_profit is not None:
                     status.slipped_pnl += realised_profit
                     status.honest_pnl += realised_profit
-                streak = ctx.history.record_miss(exchange, cycle.id, result.status, realised_profit, now)
-                if settings.cycle_miss_limit > 0 and streak >= settings.cycle_miss_limit:
-                    until = now + settings.cycle_block_hours * 3600.0
-                    cycle_block[cycle.id] = until
-                    status.blocked_cycles[cycle.id] = until
-                    ctx.history.block(exchange, cycle.id, until)
-                    status.bump("auto_blocked")
-                    log.info("%s auto-blocked %s for %.1fh after %s misses", exchange, cycle.id, settings.cycle_block_hours, streak)
-                    await ctx.alerts.send(
-                        f"{exchange.upper()} blocked {cycle.id} for {settings.cycle_block_hours:g}h "
-                        f"({streak} slipped/failed in a row)"
-                    )
+                await count_miss(cycle, result.status, realised_profit)
                 return
 
             filled = result.realised

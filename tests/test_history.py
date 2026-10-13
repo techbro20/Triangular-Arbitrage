@@ -100,6 +100,72 @@ def test_since_filter_and_held_resets_streak(tmp_path):
     assert history.streaks["bingx"]["link"] == 1
 
 
+def _rest_mismatch(ts, exchange, cycle, detail="ws 30.0bps, rest fees"):
+    return {
+        "ts": ts,
+        "exchange": exchange,
+        "status": "rejected",
+        "cycle": cycle,
+        "reason": "rest_mismatch",
+        "detail": detail,
+        "theoretical_product": 1.003,
+    }
+
+
+def test_rest_mismatches_count_toward_block_but_rest_outages_do_not(tmp_path):
+    now = time.time()
+    log = tmp_path / "opp.jsonl"
+    _write(
+        log,
+        [
+            _rest_mismatch(now - 300, "bingx", "ultima"),
+            _rest_mismatch(now - 250, "bingx", "ultima", "rest not ready"),
+            _rest_mismatch(now - 200, "bingx", "ultima", "rest error TimeoutError()"),
+            _rest_mismatch(now - 150, "bingx", "ultima"),
+            _miss(now - 100, "bingx", "ultima", "failed"),
+        ],
+    )
+    history, _ = load_history(str(log), miss_limit=3, block_hours=4)
+    assert history.get("bingx").rest_mismatch == 2
+    assert "ultima" in history.active_blocks("bingx")
+
+
+def test_blocks_escalate_and_reset_after_held(tmp_path):
+    from triangular_arbitrage.history import PnlHistory
+
+    h = PnlHistory()
+    assert h.block("bingx", "c", 0.0, 4, 168) == (4 * 3600.0, 4)
+    assert h.block("bingx", "c", 0.0, 4, 168)[1] == 8
+    assert h.block("bingx", "c", 0.0, 4, 168)[1] == 16
+    for _ in range(4):
+        h.block("bingx", "c", 0.0, 4, 168)
+    assert h.block("bingx", "c", 0.0, 4, 168)[1] == 168  # capped
+    h.record_booked("bingx", "c", 0.1)
+    assert h.block("bingx", "c", 0.0, 4, 168)[1] == 4
+
+
+def test_replay_escalates_repeat_offender(tmp_path):
+    # ULTIMA-like: blocked, comes back after the block, fails again -> next block is 8h
+    day = 86_400.0
+    now = time.time()
+    t0 = now - 2 * day
+    log = tmp_path / "opp.jsonl"
+    _write(
+        log,
+        [
+            _miss(t0, "bingx", "ultima", "failed"),
+            _miss(t0 + 60, "bingx", "ultima", "failed"),
+            _miss(t0 + 120, "bingx", "ultima", "failed"),  # block 1: 4h
+            _rest_mismatch(now - 600, "bingx", "ultima"),
+            _rest_mismatch(now - 300, "bingx", "ultima"),
+            _miss(now - 60, "bingx", "ultima", "failed"),  # block 2: 8h
+        ],
+    )
+    history, _ = load_history(str(log), miss_limit=3, block_hours=4, block_max_hours=168)
+    until = history.active_blocks("bingx")["ultima"]
+    assert abs(until - (now - 60 + 8 * 3600)) < 1
+
+
 def test_missing_log_is_empty(tmp_path):
     history, recent = load_history(str(tmp_path / "nope.jsonl"), miss_limit=3, block_hours=4)
     assert history.total_booked() == (0.0, 0) and recent == []

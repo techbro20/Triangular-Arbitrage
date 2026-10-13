@@ -133,7 +133,8 @@ def _debug_text(ctx: AppContext) -> str:
         lines.append(
             f"  honest_pnl all-time={row.honest_pnl:+.4f} "
             f"(booked {row.booked_pnl:+.4f} x{row.booked_trades}, "
-            f"slipped {row.slipped_pnl:+.4f} x{row.slipped}, failed x{row.failed})"
+            f"slipped {row.slipped_pnl:+.4f} x{row.slipped}, failed x{row.failed}, "
+            f"rest_mismatch x{row.rest_mismatch})"
         )
         now = time.time()
         blocked = {cid: until for cid, until in snap.blocked_cycles.items() if until > now}
