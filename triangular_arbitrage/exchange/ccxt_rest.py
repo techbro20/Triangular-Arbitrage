@@ -88,18 +88,21 @@ def _to_markets(raw_list: list[dict], taker_override: float | None) -> list[Mark
 
 
 async def _fetch_raw_markets(client) -> list[dict]:
+    # Spot only: load_markets would also hit futures endpoints (MEXC contract API) we never use.
     if hasattr(client, "fetch_spot_markets"):
         try:
             return await client.fetch_spot_markets({})
         except TypeError:
             return await client.fetch_spot_markets()
-        except (RequestTimeout, NetworkError, TimeoutError, asyncio.TimeoutError):
-            # Fallback: load_markets can succeed when spot-only helper times out
-            log.warning("%s fetch_spot_markets timed out; falling back to load_markets", client.id)
-            raw = await client.load_markets(reload=True)
-            return list(raw.values())
     raw = await client.load_markets()
     return list(raw.values())
+
+
+async def _load_spot_into(client) -> None:
+    if hasattr(client, "fetch_spot_markets"):
+        client.set_markets(await _fetch_raw_markets(client))
+    else:
+        await client.load_markets()
 
 
 def _client(exchange_id: str, credentials: dict | None = None):
@@ -133,7 +136,7 @@ class RestBookClient:
         """fetch_order_book needs markets loaded; do it up front (MEXC can take ~60s)."""
         for attempt in range(3):
             try:
-                await self._client.load_markets()
+                await _load_spot_into(self._client)
                 self.ready = True
                 return
             except Exception as exc:

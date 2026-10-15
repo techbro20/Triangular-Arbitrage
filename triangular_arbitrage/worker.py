@@ -4,6 +4,9 @@ import asyncio
 import logging
 import time
 
+import aiohttp
+from ccxt.base import errors as ccxt_errors
+
 from triangular_arbitrage.books import BookStore
 from triangular_arbitrage.config import Settings
 from triangular_arbitrage.context import AppContext
@@ -80,15 +83,45 @@ def _mid(bids, asks) -> float | None:
     return (bids[0][0] + asks[0][0]) / 2.0
 
 
+_NETWORK_ERRORS = (ccxt_errors.NetworkError, aiohttp.ClientError, OSError)
+_OUTAGE_BACKOFF_START = 5.0
+_OUTAGE_BACKOFF_MAX = 300.0
+# A session that survived this long counts as healthy, so the next outage starts a fresh backoff.
+_HEALTHY_SESSION_S = 120.0
+
+
 async def run_worker(exchange: str, ctx: AppContext) -> None:
+    backoff = _OUTAGE_BACKOFF_START
+    outage_alerted = False
     while not ctx.stop.is_set() and not ctx.risk.killed:
+        started = time.monotonic()
         try:
             await _run_session(exchange, ctx)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            log.exception("%s worker crashed", exchange)
+        except Exception as exc:
             ctx.statuses.setdefault(exchange, WorkerSnapshot(exchange=exchange)).errors += 1
+            if time.monotonic() - started >= _HEALTHY_SESSION_S:
+                backoff = _OUTAGE_BACKOFF_START
+                outage_alerted = False
+            if isinstance(exc, _NETWORK_ERRORS):
+                log.warning(
+                    "%s network unavailable (%s: %s); retrying in %.0fs",
+                    exchange,
+                    type(exc).__name__,
+                    str(exc)[:200],
+                    backoff,
+                )
+                if not outage_alerted:
+                    outage_alerted = True
+                    await ctx.alerts.send(
+                        f"{exchange.upper()} network outage ({type(exc).__name__}); "
+                        f"retrying with backoff up to {_OUTAGE_BACKOFF_MAX:.0f}s"
+                    )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, _OUTAGE_BACKOFF_MAX)
+                continue
+            log.exception("%s worker crashed", exchange)
             await ctx.alerts.send(f"{exchange} worker error; retrying in 5s")
             await asyncio.sleep(5)
 
